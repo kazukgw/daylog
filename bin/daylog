@@ -1,0 +1,203 @@
+#!/usr/bin/python
+# coding: utf-8
+
+import sys
+import re
+import datetime
+import os
+import argparse
+import glob
+
+DEBUG = False
+# DEBUG = True
+
+def debug(*keys):
+    if DEBUG:
+        print keys
+
+def check_and_mkdir(path):
+    if not os.path.exists(path):
+        os.mkdir(path)
+    elif not os.path.isdir(path):
+        print path + ' is not directory!'
+        sys.exit(1)
+
+class Args(object):
+    def __init__(self, args):
+        debug(args)
+        self.args = args
+        try:
+            self.validate()
+        except StandardError:
+            sys.exit(1)
+
+        if self.args.fromd:
+            self.fromd = datetime.datetime.strptime(self.args.fromd, '%Y-%m-%d')
+        else:
+            self.fromd = None
+
+        if self.args.tod:
+            self.tod = datetime.datetime.strptime(self.args.tod, '%Y-%m-%d')
+        else:
+            self.tod = None
+
+        if self.args.tag:
+            self.tags = self.args.tag.split(',')
+        else:
+            self.tags = None
+
+
+    def validate(self):
+        if self.args.fromd and not re.match(r'\d{4}-\d{2}-\d{2}', self.args.fromd):
+            print 'fromd option does not match date format.'
+            raise StandardError
+        if self.args.tod and not re.match(r'\d{4}-\d{2}-\d{2}', self.args.tod):
+            print 'tod option does not match datetime format.'
+            raise StandardError
+
+class Content(object):
+    def __init__(self, path):
+        self.path = path
+        self.base_name, self.file_name = os.path.split(path)
+
+    def print_title(self):
+        prms = self.file_name.split('_')
+        print '## [' + prms[0] + ' ' + prms[1].replace('-', ':') + '] '\
+              + re.sub(r'\.md$', '', ' '.join(prms[2:]))
+
+    def print_body(self):
+        f = open(self.path, 'r')
+        print f.read()
+        f.close()
+
+
+def create(daylog_dir, lines):
+    if len(lines) < 1:
+        return
+
+    tags = []
+    body = ""
+    for line in lines:
+        matches = re.search(r'^%([^%,_]+)$', line)
+        if matches != None:
+            tags += [x.strip() for x in matches.groups() for x in x.split(' ')]
+        body += line
+
+    today = '{:%Y-%m-%d}'.format(datetime.datetime.now())
+    time = '{:%H-%M-%S}'.format(datetime.datetime.now())
+
+    filename = today + '_' + time
+    if len(tags) > 0:
+        filename += '_' + '_'.join(set(tags))
+    filename += '.md'
+
+    debug('filename:', filename)
+
+    check_and_mkdir(daylog_dir)
+
+    today_dir = os.path.join(daylog_dir, today)
+    check_and_mkdir(today_dir)
+
+    f = open(os.path.join(today_dir, filename), 'a')
+    f.write(body)
+    f.close()
+
+
+def show(daylog_dir, raw_args):
+    debug('show')
+    args = Args(raw_args)
+    files = []
+    if not args.fromd and not args.tod:
+        targdir = os.path.join(daylog_dir, datetime.datetime.now().strftime('%Y-%m-%d'), '*.md')
+        files = glob.glob(targdir)
+    else:
+        dirs = glob.glob(os.path.join(daylog_dir, '*'))
+        for d in dirs:
+            if os.path.isdir(d):
+                try:
+                    targdirdate = datetime.datetime.strptime(dirs, '%Y-%m-%d')
+                    if args.fromd and targdirdate <= args.fromd:
+                        continue
+                    if args.tod and targdirdate >= args.tod:
+                        continue
+                    targdir = os.path.join(daylog_dir, d, '*.md')
+                    files += glob.glob(targdir)
+                except ValueError:
+                    pass
+    for f in files:
+        c = Content(f)
+        c.print_title()
+        c.print_body()
+
+
+def filtering(args, lines):
+    debug('==> filter')
+    title = ''
+    contents = ''
+    titlepattern = re.compile('.*')
+    bodypattern = re.compile('.*')
+    if args.title:
+        try:
+            titlepattern = re.compile(args.title)
+        except re.error:
+            print 'faild to parse title option as regexp pattern'
+            sys.exit(1)
+    if args.body:
+        try:
+            bodypattern = re.compile(args.body)
+        except re.error:
+            print 'faild to parse body option as regexp pattern'
+            sys.exit(1)
+
+    debug('bodypattern', bodypattern.pattern)
+    for line in lines:
+        if line.startswith('##'):
+            if titlepattern.search(title) and bodypattern.search(contents):
+                print title
+                print contents
+
+            title = line
+            contents = ''
+        else:
+            contents += line
+
+    if titlepattern.search(title) and bodypattern.search(contents):
+        print title
+        print contents
+
+
+def main():
+    debug('==> main')
+    psr = argparse.ArgumentParser()
+    psr.add_argument('-fromd', nargs='?')
+    psr.add_argument('-tod', nargs='?')
+    psr.add_argument('-tag', nargs='?')
+    psr.add_argument('-filter', action='store_true')
+    psr.add_argument('-title', nargs='?')
+    psr.add_argument('-body', nargs='?')
+    args = psr.parse_args()
+
+    daylog_dir = os.environ['DAYLOG']
+
+    if len(daylog_dir) < 1:
+        print 'DALOG is not defined'
+        sys.exit(1)
+
+    check_and_mkdir(daylog_dir)
+
+    debug('daylog_dir: ', daylog_dir)
+
+    # 標準入力があるかで分岐
+    if not sys.stdin.isatty():
+        debug('isnotatty')
+        if args.filter:
+            filtering(args, sys.stdin.readlines())
+        else:
+            create(daylog_dir, sys.stdin.readlines())
+    else:
+        show(daylog_dir, args)
+
+
+
+if __name__ == '__main__':
+    main()
